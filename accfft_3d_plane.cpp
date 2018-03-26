@@ -1,4 +1,4 @@
-#include <fftw3-mpi.h>
+#include <accfft.h>
 
 #include <boost/program_options.hpp>
 
@@ -13,23 +13,25 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
-    fftw_mpi_init();
+    accfft_init();
 
     auto cli_description = po::options_description(
-            "Benchmarks a 2D complex FFT using FFTW"
+            "Benchmarks a 3D complex FFT using AccFFT"
     );
 
     auto repetitions = 0ul;
-    auto Nx = ptrdiff_t(0);
-    auto Ny = ptrdiff_t(0);
+    auto Nx = 0;
+    auto Ny = 0;
+    auto Nz = 0;
 
     // Add all the different program options
     cli_description.add_options()
             ("help", "gives this help message")
             ("repetitions,r", po::value<unsigned long int>(&repetitions)->default_value(100),
              "number of FFTs performed during this run")
-            ("nx", po::value<ptrdiff_t>(&Nx)->default_value(128), "grid dimension along the x-axis")
-            ("ny", po::value<ptrdiff_t>(&Ny)->default_value(128), "grid dimension along the y-axis");
+            ("nx", po::value<int>(&Nx)->default_value(128), "grid dimension along the x-axis")
+            ("ny", po::value<int>(&Ny)->default_value(128), "grid dimension along the y-axis")
+            ("nz", po::value<int>(&Nz)->default_value(128), "grid dimension along the y-axis");
 
     // Parse the command line and push the values to local variables
     auto vm = po::variables_map();
@@ -53,50 +55,68 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // AccFFT needs a Cartesian communicator, setting to zero
+    // seems to let the library decide automatically on the size
+    auto c_dims = array<int, 2>({0, 0});
+    MPI_Comm c_comm;
+    accfft_create_comm(MPI_COMM_WORLD, c_dims.data(), &c_comm);
+
     // Global size of the 2D grid
-    fftw_complex *data;
-    ptrdiff_t alloc_local, local_n0, local_0_start, i, j;
+    Complex *data;
+    ptrdiff_t alloc_local;
 
     // Get local data size and allocate
-    alloc_local = fftw_mpi_local_size_2d(Nx, Ny, MPI_COMM_WORLD, &local_n0, &local_0_start);
-    data = fftw_alloc_complex(size_t(alloc_local));
-    fill(&data[0][0], &data[0][0] + 2 * alloc_local, 0.0);
+    auto isize = array<int, 3>();
+    auto osize = array<int, 3>();
+    auto istart = array<int, 3>();
+    auto ostart = array<int, 3>();
+    // Apparently there are issues with Nz == 1
+    auto n = array<int, 3>({Nx, Ny, Nz});
 
-    // Create plan_forward for in-place forward DFT
-    fftw_plan plan_forward;
-    plan_forward = fftw_mpi_plan_dft_2d(Nx, Ny, data, data, MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE);
-    fftw_plan plan_backward;
-    plan_backward = fftw_mpi_plan_dft_2d(Nx, Ny, data, data, MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE);
+    alloc_local = accfft_local_size_dft_c2c(
+            n.data(), isize.data(), istart.data(),
+            osize.data(), ostart.data(), c_comm
+    );
+    data = reinterpret_cast<Complex *>(accfft_alloc(alloc_local));
+
+    // Create a plan, differently from FFTW the direction of the FFT is set
+    // at execution time
+    auto plan = accfft_plan_dft_3d_c2c(n.data(), data, data, c_comm, ACCFFT_MEASURE);
 
     // Initialize data to some function my_function(x,y)
-    for (i = 0; i < local_n0; ++i) {
-        for (j = 0; j < Ny; ++j) {
-            data[i * Ny + j][0] = local_0_start + i;
-            data[i * Ny + j][1] = j;
+    for (int i = 0; i < isize[0]; i++) {
+        for (int j = 0; j < isize[1]; j++) {
+            for (int k = 0; k < isize[2]; k++) {
+                auto ptr = i * isize[1] * n[2] + j * n[2] + k;
+                data[ptr][0] = i + j + k; // Real Component
+                data[ptr][1] = i * j * k; // Imag Component
+            }
         }
     }
 
-    auto norm_before = accumulate(&data[0][0], &data[0][0] + 2 * alloc_local, 0.0,
+    auto norm_before = accumulate(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
                                   [](const double &sum, const double &x) {
                                       return sum + x * x;
                                   });
 
     // Compute transforms, in-place, as many times as desired
     auto start_time = chrono::system_clock::now();
-    auto scale = 1.0 / (Nx * Ny);
+    auto scale = 1.0 / (Nx * Ny * Nz);
+
     for (auto ii = 0ul; ii < repetitions; ++ii) {
-        fftw_execute(plan_forward);
-        fftw_execute(plan_backward);
-        for_each(&data[0][0], &data[0][0] + 2 * alloc_local, [scale](auto &item) { item *= scale; });
+        accfft_execute_c2c(plan, ACCFFT_FORWARD, data, data);
+        accfft_execute_c2c(plan, ACCFFT_BACKWARD, data, data);
+        for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
     }
     auto end_time = chrono::system_clock::now();
     auto elapsed = chrono::duration<double>(end_time - start_time);
+
     stringstream msg;
     msg.str(string());
     msg << "Elapsed time: " << elapsed.count() << " sec.\n\n";
     MpiMasterWrite(msg.str());
 
-    auto norm_after = accumulate(&data[0][0], &data[0][0] + 2 * alloc_local, 0.0,
+    auto norm_after = accumulate(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
                                  [](const double &sum, const double &x) {
                                      return sum + x * x;
                                  });
@@ -107,9 +127,8 @@ int main(int argc, char **argv) {
     msg << "Error: " << norm_after - norm_before << "\n";
     MpiMasterWrite(msg.str());
 
-    fftw_destroy_plan(plan_forward);
-    fftw_destroy_plan(plan_backward);
-    free(data);
-    fftw_mpi_cleanup();
+    accfft_free(data);
+    accfft_destroy_plan(plan);
+    accfft_cleanup();
     MPI_Finalize();
 }

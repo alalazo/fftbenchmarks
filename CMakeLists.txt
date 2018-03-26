@@ -7,26 +7,61 @@ set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
 find_package(MPI)
 find_package(FFTW REQUIRED)
+find_package(AccFFT)
 find_package(Boost REQUIRED
     COMPONENTS
     program_options
     )
 
+
+# Sets include directories and link libraries for an FFTW
+# application using MPI. It must be called passing the name
+# of the application as the first argument, followed by all
+# the source files:
+#
+#     fftw_mpi_application(fftw_example fftw_example.cpp)
+#
+function(fftw_mpi_application name)
+    add_executable(
+        ${name}
+        ${ARGN}
+    )
+
+    target_include_directories(${name} PUBLIC
+        ${FFTW_INCLUDE_DIR}
+        ${MPI_CXX_INCLUDE_PATH}
+        ${Boost_INCLUDE_DIRS}
+        )
+
+    target_link_libraries(${name} PUBLIC
+        ${Boost_PROGRAM_OPTIONS_LIBRARY}
+        ${FFTW_MPI_LIBRARY} ${FFTW_LIBRARY}
+        ${MPI_CXX_LIBRARIES}
+        )
+endfunction()
+
+function(accfft_mpi_application name)
+    add_executable(
+        ${name}
+        ${ARGN}
+    )
+
+    target_include_directories(${name} PUBLIC
+        ${MPI_CXX_INCLUDE_PATH}
+        ${ACCFFT_INCLUDE_DIRS}
+        ${FFTW_INCLUDE_DIR}
+        ${Boost_INCLUDE_DIRS}
+        )
+
+    target_link_libraries(${name} PUBLIC
+        ${Boost_PROGRAM_OPTIONS_LIBRARY}
+        ${ACCFFT_CPU_LIBRARY}
+        ${ACCFFT_CPU_FFTW_LIBRARIES}
+        ${MPI_CXX_LIBRARIES}
+        )
+endfunction()
+
 # FFTW transformation over a 2D plane, back and forth
-add_executable(
-    fftw_2d_plane
-    fftw_2d_plane.cpp
-)
+fftw_mpi_application(fftw_2d_plane fftw_2d_plane.cpp)
 
-target_include_directories(fftw_2d_plane PUBLIC
-    ${FFTW_INCLUDE_DIR}
-    ${MPI_CXX_INCLUDE_PATH}
-    ${Boost_INCLUDE_DIRS}
-    )
-
-target_link_libraries(fftw_2d_plane PUBLIC
-    ${Boost_PROGRAM_OPTIONS_LIBRARY}
-    ${FFTW_MPI_LIBRARY} ${FFTW_LIBRARY}
-    ${MPI_CXX_LIBRARIES}
-    )
-
+accfft_mpi_application(accfft_3d_plane accfft_3d_plane.cpp)
