@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
     msg.str(string());
     msg << "Initial square norm: " << norm_before << " ";
     msg << "Final square norm: " << norm_after << "\n";
-    msg << "Error: " << norm_after - norm_before << "\n";
+    msg << "Relative error: " << (norm_after - norm_before) / norm_before << "\n";
     MpiMasterWrite(msg.str());
 
     fftw_destroy_plan(plan_forward);

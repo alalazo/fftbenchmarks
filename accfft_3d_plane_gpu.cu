@@ -1,4 +1,5 @@
-#include <accfft.h>
+#include <accfft_gpu.h>
+#include <cuda_runtime_api.h>
 
 #include <boost/program_options.hpp>
 
@@ -8,8 +9,11 @@
 #include <numeric>
 #include <sstream>
 
+#include <cstdlib>
+
 using namespace std;
 namespace po = boost::program_options;
+
 
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
@@ -62,7 +66,8 @@ int main(int argc, char **argv) {
     accfft_create_comm(MPI_COMM_WORLD, c_dims.data(), &c_comm);
 
     // Global size of the 2D grid
-    Complex *data;
+    Complex * data = nullptr;
+    Complex * data_cpu = nullptr;
     ptrdiff_t alloc_local;
 
     // Get local data size and allocate
@@ -73,62 +78,70 @@ int main(int argc, char **argv) {
     // Apparently there are issues with Nz == 1
     auto n = array<int, 3>({Nx, Ny, Nz});
 
-    alloc_local = accfft_local_size_dft_c2c(
+    alloc_local = accfft_local_size_dft_c2c_gpu(
             n.data(), isize.data(), istart.data(),
             osize.data(), ostart.data(), c_comm
     );
-    data = reinterpret_cast<Complex *>(accfft_alloc(alloc_local));
+    data_cpu = reinterpret_cast<Complex *>(malloc(alloc_local));
+    cudaMalloc((void**) &data, alloc_local);
 
     // Create a plan, differently from FFTW the direction of the FFT is set
     // at execution time
-    auto plan = accfft_plan_dft_3d_c2c(n.data(), data, data, c_comm, ACCFFT_MEASURE);
+    auto plan = accfft_plan_dft_3d_c2c_gpu(n.data(), data, data, c_comm, ACCFFT_MEASURE);
 
     // Initialize data to some function my_function(x,y)
     for (int i = 0; i < isize[0]; i++) {
         for (int j = 0; j < isize[1]; j++) {
             for (int k = 0; k < isize[2]; k++) {
                 auto ptr = i * isize[1] * n[2] + j * n[2] + k;
-                data[ptr][0] = i + j + k; // Real Component
-                data[ptr][1] = i * j * k; // Imag Component
+                data_cpu[ptr][0] = i + j + k; // Real Component
+                data_cpu[ptr][1] = i * j * k; // Imag Component
             }
         }
     }
 
-    auto norm_before = accumulate(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
+    auto norm_before = accumulate(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
                                   [](const double &sum, const double &x) {
                                       return sum + x * x;
                                   });
+    // Copy data to device
+    cudaMemcpy(data, data_cpu, alloc_local, cudaMemcpyHostToDevice);
+    MPI_Barrier(MPI_COMM_WORLD);
 
     // Compute transforms, in-place, as many times as desired
     auto start_time = chrono::system_clock::now();
-    auto scale = 1.0 / (Nx * Ny * Nz);
-
+    // auto scale = 1.0 / (Nx * Ny * Nz);
     for (auto ii = 0ul; ii < repetitions; ++ii) {
-        accfft_execute_c2c(plan, ACCFFT_FORWARD, data, data);
-        accfft_execute_c2c(plan, ACCFFT_BACKWARD, data, data);
-        for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
+        accfft_execute_c2c_gpu(plan, ACCFFT_FORWARD, data, data);
+        accfft_execute_c2c_gpu(plan, ACCFFT_BACKWARD, data, data);
+        //for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
     }
     auto end_time = chrono::system_clock::now();
     auto elapsed = chrono::duration<double>(end_time - start_time);
+
+    // Copy data back to host
+    cudaMemcpy(data_cpu, data, alloc_local, cudaMemcpyDeviceToHost);
+    MPI_Barrier(MPI_COMM_WORLD);
 
     stringstream msg;
     msg.str(string());
     msg << "Elapsed time: " << elapsed.count() << " sec.\n\n";
     MpiMasterWrite(msg.str());
 
-    auto norm_after = accumulate(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
+    auto norm_after = accumulate(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
                                  [](const double &sum, const double &x) {
                                      return sum + x * x;
                                  });
 
-    msg.str(string());    
+    msg.str(string());
     msg << "Initial square norm: " << norm_before << " ";
     msg << "Final square norm: " << norm_after << "\n";
-    msg << "Relative error: " << (norm_after - norm_before) / norm_before << "\n";
+    msg << "Error: " << norm_after - norm_before << "\n";
     MpiMasterWrite(msg.str());
 
-    accfft_free(data);
+    free(data_cpu);
+    cudaFree(data);
     accfft_destroy_plan(plan);
-    accfft_cleanup();
+    accfft_cleanup_gpu();
     MPI_Finalize();
 }

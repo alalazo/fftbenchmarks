@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.8)
 
-project(FFTBenchmarks)
+project(FFTBenchmarks
+    LANGUAGES C CXX CUDA
+    )
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CUDA_STANDARD 14)
 
 # Update CMAKE_MODULE_PATH with local CMake modules
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
@@ -61,7 +66,29 @@ function(accfft_mpi_application name)
         )
 endfunction()
 
+function(accfft_mpi_cuda_application name)
+    add_executable(
+        ${name}
+        ${ARGN}
+    )
+
+    target_include_directories(${name} PUBLIC SYSTEM
+        ${MPI_CXX_INCLUDE_PATH}
+        ${ACCFFT_INCLUDE_DIRS}
+        ${Boost_INCLUDE_DIRS}
+        )
+
+    target_link_libraries(${name} PUBLIC
+        ${Boost_PROGRAM_OPTIONS_LIBRARY}
+        ${ACCFFT_GPU_LIBRARY}
+        ${ACCFFT_CPU_FFTW_LIBRARIES}
+        ${MPI_CXX_LIBRARIES}
+        -lcufft
+        )
+endfunction()
+
 # FFTW transformation over a 2D plane, back and forth
 fftw_mpi_application(fftw_2d_plane fftw_2d_plane.cpp)
 
 accfft_mpi_application(accfft_3d_plane accfft_3d_plane.cpp)
+accfft_mpi_cuda_application(accfft_3d_plane_gpu accfft_3d_plane_gpu.cu)

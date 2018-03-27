@@ -18,3 +18,10 @@ find_path(ACCFFT_INCLUDE_DIRS
     PATH_SUFFIXES include
     DOC "Location of the AccFFT library header files"
     )
+
+find_library(ACCFFT_GPU_LIBRARY
+    NAMES accfft_gpu
+    HINTS $ENV{ACCFFT_ROOT}
+    PATH_SUFFIXES lib
+    DOC "Location of the AccFFT GPU library"
+    )
