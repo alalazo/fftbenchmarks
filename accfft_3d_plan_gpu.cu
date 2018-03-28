@@ -1,5 +1,6 @@
 #include <accfft_gpu.h>
 #include <cuda_runtime_api.h>
+#include <cublas_v2.h>
 
 #include <boost/program_options.hpp>
 
@@ -108,12 +109,17 @@ int main(int argc, char **argv) {
     cudaMemcpy(data, data_cpu, alloc_local, cudaMemcpyHostToDevice);
     MPI_Barrier(MPI_COMM_WORLD);
 
+    // Set the handle to cuBlas
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
     // Compute transforms, in-place, as many times as desired
     auto start_time = chrono::system_clock::now();
-    // auto scale = 1.0 / (Nx * Ny * Nz);
+    auto scale = 1.0 / (Nx * Ny * Nz);
     for (auto ii = 0ul; ii < repetitions; ++ii) {
         accfft_execute_c2c_gpu(plan, ACCFFT_FORWARD, data, data);
         accfft_execute_c2c_gpu(plan, ACCFFT_BACKWARD, data, data);
+        cublasDscal(handle, 2 * isize[0] * isize[1] * n[2], &scale, &data[0][0], 1);
         //for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
     }
     auto end_time = chrono::system_clock::now();
@@ -136,9 +142,10 @@ int main(int argc, char **argv) {
     msg.str(string());
     msg << "Initial square norm: " << norm_before << " ";
     msg << "Final square norm: " << norm_after << "\n";
-    msg << "Error: " << norm_after - norm_before << "\n";
+    msg << "Relative error: " << (norm_after - norm_before) / norm_before << "\n";
     MpiMasterWrite(msg.str());
 
+    cublasDestroy(handle);
     free(data_cpu);
     cudaFree(data);
     accfft_destroy_plan(plan);

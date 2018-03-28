@@ -72,7 +72,7 @@ function(accfft_mpi_cuda_application name)
         ${ARGN}
     )
 
-    target_include_directories(${name} PUBLIC SYSTEM
+    target_include_directories(${name} SYSTEM PUBLIC
         ${MPI_CXX_INCLUDE_PATH}
         ${ACCFFT_INCLUDE_DIRS}
         ${Boost_INCLUDE_DIRS}
@@ -83,12 +83,12 @@ function(accfft_mpi_cuda_application name)
         ${ACCFFT_GPU_LIBRARY}
         ${ACCFFT_CPU_FFTW_LIBRARIES}
         ${MPI_CXX_LIBRARIES}
-        -lcufft
+        -lcufft -lcublas
         )
 endfunction()
 
 # FFTW transformation over a 2D plane, back and forth
-fftw_mpi_application(fftw_2d_plane fftw_2d_plane.cpp)
+fftw_mpi_application(fftw_2d_plan fftw_2d_plan.cpp)
 
-accfft_mpi_application(accfft_3d_plane accfft_3d_plane.cpp)
-accfft_mpi_cuda_application(accfft_3d_plane_gpu accfft_3d_plane_gpu.cu)
+accfft_mpi_application(accfft_3d_plan accfft_3d_plan.cpp)
+accfft_mpi_cuda_application(accfft_3d_plan_gpu accfft_3d_plan_gpu.cu)
