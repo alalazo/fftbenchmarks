@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
         auto Ny = n[1];
         auto Nz = n[2];
 
-        // Global size of the 2D grid
+        // Global size of the 3D grid
         fftw_complex *data;
         ptrdiff_t alloc_local, local_n0, local_0_start;
 
@@ -85,11 +85,16 @@ int main(int argc, char **argv) {
             }
         }
 
+        auto scale = 1.0 / (Nx * Ny * Nz);
+        // To avoid accounting for padding I need to execute a dry run before
+        // measuring the l2 norm of the vector of doubles
+        fftw_execute(plan_forward);
+        fftw_execute(plan_backward);
+        for_each(&data[0][0], &data[0][0] + 2 * alloc_local, [scale](auto &item) { item *= scale; });
         auto norm_before = l2square(&data[0][0], &data[0][0] + 2 * alloc_local);
 
         // Compute transforms, in-place, as many times as desired
         auto start_time = chrono::system_clock::now();
-        auto scale = 1.0 / (Nx * Ny * Nz);
         for (auto ii = 0ul; ii < repetitions; ++ii) {
             fftw_execute(plan_forward);
             fftw_execute(plan_backward);
