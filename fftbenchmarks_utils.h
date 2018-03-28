@@ -8,6 +8,8 @@
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <vector>
+
 
 auto MpiWrite = [](int target_rank) {
     auto rank = 0;
@@ -58,5 +60,16 @@ std::string results_line(T Nx, T Ny, T Nz, R repetitions, E elapsed, double rel_
     return msg.str();
 }
 
+template<class T>
+std::vector<std::array<T, 3>> zip(const std::vector<T> &x, const std::vector<T> &y, const std::vector<T> &z) {
 
+    auto length = std::min(std::min(x.size(), y.size()), z.size());
+    auto result = std::vector<std::array<T, 3>>();
+
+    for (auto ii = 0ul; ii < length; ++ii) {
+        result.push_back({x[ii], y[ii], z[ii]});
+    }
+
+    return result;
+}
 #endif //FFTBENCHMARKS_FFTBENCHMARKS_UTILS_H_20180328
