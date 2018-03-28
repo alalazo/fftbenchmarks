@@ -103,6 +103,6 @@ fftw_mpi_application(fftw_3d_plan fftw_3d_plan.cpp fftbenchmarks_utils.h)
 
 # AccFFT
 accfft_mpi_application(accfft_3d_plan accfft_3d_plan.cpp fftbenchmarks_utils.h)
-if (ENABlE_CUDA)
+if (ENABLE_CUDA)
     accfft_mpi_cuda_application(accfft_3d_plan_gpu accfft_3d_plan_gpu.cu fftbenchmarks_utils.h)
 endif ()
