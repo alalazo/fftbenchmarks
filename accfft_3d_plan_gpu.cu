@@ -1,3 +1,5 @@
+#include <fftbenchmarks_utils.h>
+
 #include <accfft_gpu.h>
 #include <cuda_runtime_api.h>
 #include <cublas_v2.h>
@@ -36,22 +38,13 @@ int main(int argc, char **argv) {
              "number of FFTs performed during this run")
             ("nx", po::value<int>(&Nx)->default_value(128), "grid dimension along the x-axis")
             ("ny", po::value<int>(&Ny)->default_value(128), "grid dimension along the y-axis")
-            ("nz", po::value<int>(&Nz)->default_value(128), "grid dimension along the y-axis");
+            ("nz", po::value<int>(&Nz)->default_value(128), "grid dimension along the z-axis");
 
     // Parse the command line and push the values to local variables
     auto vm = po::variables_map();
     po::store(po::parse_command_line(argc, argv, cli_description), vm);
     po::notify(vm);
 
-    auto rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    auto MpiWrite = [rank](int target_rank) {
-        return [rank, target_rank](auto message) {
-            if (rank == target_rank) {
-                cout << message;
-            }
-        };
-    };
     auto MpiMasterWrite = MpiWrite(0);
 
     if (vm.count("help")) {
@@ -90,6 +83,8 @@ int main(int argc, char **argv) {
     // at execution time
     auto plan = accfft_plan_dft_3d_c2c_gpu(n.data(), data, data, c_comm, ACCFFT_MEASURE);
 
+    MpiMasterWrite(results_header("AccFFT-GPU complex transform over a 3D region"));
+
     // Initialize data to some function my_function(x,y)
     for (int i = 0; i < isize[0]; i++) {
         for (int j = 0; j < isize[1]; j++) {
@@ -101,10 +96,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    auto norm_before = accumulate(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
-                                  [](const double &sum, const double &x) {
-                                      return sum + x * x;
-                                  });
+    auto norm_before = l2square(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2]);
+
     // Copy data to device
     cudaMemcpy(data, data_cpu, alloc_local, cudaMemcpyHostToDevice);
     MPI_Barrier(MPI_COMM_WORLD);
@@ -120,7 +113,6 @@ int main(int argc, char **argv) {
         accfft_execute_c2c_gpu(plan, ACCFFT_FORWARD, data, data);
         accfft_execute_c2c_gpu(plan, ACCFFT_BACKWARD, data, data);
         cublasDscal(handle, 2 * isize[0] * isize[1] * n[2], &scale, &data[0][0], 1);
-        //for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
     }
     auto end_time = chrono::system_clock::now();
     auto elapsed = chrono::duration<double>(end_time - start_time);
@@ -128,22 +120,9 @@ int main(int argc, char **argv) {
     // Copy data back to host
     cudaMemcpy(data_cpu, data, alloc_local, cudaMemcpyDeviceToHost);
     MPI_Barrier(MPI_COMM_WORLD);
+    auto norm_after = l2square(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2]);
 
-    stringstream msg;
-    msg.str(string());
-    msg << "Elapsed time: " << elapsed.count() << " sec.\n\n";
-    MpiMasterWrite(msg.str());
-
-    auto norm_after = accumulate(&data_cpu[0][0], &data_cpu[0][0] + 2 * isize[0] * isize[1] * n[2], 0.0,
-                                 [](const double &sum, const double &x) {
-                                     return sum + x * x;
-                                 });
-
-    msg.str(string());
-    msg << "Initial square norm: " << norm_before << " ";
-    msg << "Final square norm: " << norm_after << "\n";
-    msg << "Relative error: " << (norm_after - norm_before) / norm_before << "\n";
-    MpiMasterWrite(msg.str());
+    MpiMasterWrite(results_line(Nx, Ny, Nz, repetitions, elapsed, relative_error(norm_after, norm_before)));
 
     cublasDestroy(handle);
     free(data_cpu);

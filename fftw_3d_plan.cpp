@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <iomanip>
 #include <numeric>
 #include <sstream>
 
@@ -18,12 +19,13 @@ int main(int argc, char **argv) {
     fftw_mpi_init();
 
     auto cli_description = po::options_description(
-            "Benchmarks a 2D complex FFT using FFTW"
+            "Benchmarks a 3D complex FFT using FFTW"
     );
 
     auto repetitions = 0ul;
     auto Nx = ptrdiff_t(0);
     auto Ny = ptrdiff_t(0);
+    auto Nz = ptrdiff_t(0);
 
     // Add all the different program options
     cli_description.add_options()
@@ -31,7 +33,8 @@ int main(int argc, char **argv) {
             ("repetitions,r", po::value<unsigned long int>(&repetitions)->default_value(100),
              "number of FFTs performed during this run")
             ("nx", po::value<ptrdiff_t>(&Nx)->default_value(128), "grid dimension along the x-axis")
-            ("ny", po::value<ptrdiff_t>(&Ny)->default_value(128), "grid dimension along the y-axis");
+            ("ny", po::value<ptrdiff_t>(&Ny)->default_value(128), "grid dimension along the y-axis")
+            ("nz", po::value<ptrdiff_t>(&Nz)->default_value(128), "grid dimension along the z-axis");
 
     // Parse the command line and push the values to local variables
     auto vm = po::variables_map();
@@ -48,32 +51,37 @@ int main(int argc, char **argv) {
 
     // Global size of the 2D grid
     fftw_complex *data;
-    ptrdiff_t alloc_local, local_n0, local_0_start, i, j;
+    ptrdiff_t alloc_local, local_n0, local_0_start;
 
     // Get local data size and allocate
-    alloc_local = fftw_mpi_local_size_2d(Nx, Ny, MPI_COMM_WORLD, &local_n0, &local_0_start);
+    alloc_local = fftw_mpi_local_size_3d(Nx, Ny, Nz, MPI_COMM_WORLD, &local_n0, &local_0_start);
     data = fftw_alloc_complex(size_t(alloc_local));
     fill(&data[0][0], &data[0][0] + 2 * alloc_local, 0.0);
 
     // Create plan_forward for in-place forward DFT
     fftw_plan plan_forward;
-    plan_forward = fftw_mpi_plan_dft_2d(Nx, Ny, data, data, MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE);
+    plan_forward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE);
     fftw_plan plan_backward;
-    plan_backward = fftw_mpi_plan_dft_2d(Nx, Ny, data, data, MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE);
+    plan_backward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE);
 
     // Initialize data to some function my_function(x,y)
-    for (i = 0; i < local_n0; ++i) {
-        for (j = 0; j < Ny; ++j) {
-            data[i * Ny + j][0] = local_0_start + i;
-            data[i * Ny + j][1] = j;
+    for (auto i = 0; i < local_n0; ++i) {
+        for (auto j = 0; j < Ny; ++j) {
+            for (auto k = 0; k < Nz; ++k) {
+                auto idx = (i * Ny + j) * Nz + k;
+                data[idx][0] = i + j + k;
+                data[idx][1] = i * j * k;
+            }
         }
     }
 
     auto norm_before = l2square(&data[0][0], &data[0][0] + 2 * alloc_local);
 
+    MpiMasterWrite(results_header("FFTW complex transform over a 3D region"));
+
     // Compute transforms, in-place, as many times as desired
     auto start_time = chrono::system_clock::now();
-    auto scale = 1.0 / (Nx * Ny);
+    auto scale = 1.0 / (Nx * Ny * Nz);
     for (auto ii = 0ul; ii < repetitions; ++ii) {
         fftw_execute(plan_forward);
         fftw_execute(plan_backward);
@@ -81,18 +89,9 @@ int main(int argc, char **argv) {
     }
     auto end_time = chrono::system_clock::now();
     auto elapsed = chrono::duration<double>(end_time - start_time);
-    stringstream msg;
-    msg.str(string());
-    msg << "Elapsed time: " << elapsed.count() << " sec.\n\n";
-    MpiMasterWrite(msg.str());
-
     auto norm_after = l2square(&data[0][0], &data[0][0] + 2 * alloc_local);
 
-    msg.str(string());
-    msg << "Initial square norm: " << norm_before << " ";
-    msg << "Final square norm: " << norm_after << "\n";
-    msg << "Relative error: " << (norm_after - norm_before) / norm_before << "\n";
-    MpiMasterWrite(msg.str());
+    MpiMasterWrite(results_line(Nx, Ny, Nz, repetitions, elapsed, relative_error(norm_after, norm_before)));
 
     fftw_destroy_plan(plan_forward);
     fftw_destroy_plan(plan_backward);
