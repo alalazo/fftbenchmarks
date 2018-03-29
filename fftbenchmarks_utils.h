@@ -61,13 +61,20 @@ std::string results_line(T Nx, T Ny, T Nz, R repetitions, E elapsed, double rel_
 }
 
 template<class T>
-std::vector<std::array<T, 3>> zip(const std::vector<T> &x, const std::vector<T> &y, const std::vector<T> &z) {
+std::vector<std::array<T, 4>> zip(const std::vector<T> &x,
+                                  const std::vector<T> &y,
+                                  const std::vector<T> &z,
+                                  const std::vector<unsigned long> &r
+) {
 
-    auto length = std::min(std::min(x.size(), y.size()), z.size());
-    auto result = std::vector<std::array<T, 3>>();
+    auto length = std::min(
+            std::min(x.size(), y.size()),
+            std::min(z.size(), r.size())
+    );
+    auto result = std::vector<std::array<T, 4>>();
 
     for (auto ii = 0ul; ii < length; ++ii) {
-        result.push_back({x[ii], y[ii], z[ii]});
+        result.push_back({x[ii], y[ii], z[ii], T(r[ii])});
     }
 
     return result;

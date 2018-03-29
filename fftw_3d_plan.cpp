@@ -22,16 +22,19 @@ int main(int argc, char **argv) {
             "Benchmarks a 3D complex FFT using FFTW"
     );
 
-    auto repetitions = 0ul;
-
+    auto vRepetitions = vector<unsigned long>();
     auto vNx = vector<ptrdiff_t>();
     auto vNy = vector<ptrdiff_t>();
     auto vNz = vector<ptrdiff_t>();
+    auto transpose_output = false;
 
     // Add all the different program options
     cli_description.add_options()
             ("help", "gives this help message")
-            ("repetitions,r", po::value<unsigned long int>(&repetitions)->default_value(100),
+            ("transpose", po::bool_switch(&transpose_output),
+             "transpose the output of every transformation back to its original layout")
+            ("repetitions,r",
+             po::value<vector<unsigned long int>>(&vRepetitions)->multitoken()->default_value({100}, "100"),
              "number of FFTs performed during this run")
             ("nx", po::value<vector<ptrdiff_t>>(&vNx)->multitoken()->default_value({128}, "128"),
              "grid dimension along the x-axis")
@@ -53,11 +56,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (transpose_output) {
+        MpiMasterWrite("Final transposition [activated]\n");
+    } else {
+        MpiMasterWrite("Final transposition [deactivated]\n");
+    }
     MpiMasterWrite(results_header("FFTW complex transform over a 3D region"));
-    for (auto n: zip(vNx, vNy, vNz)) {
+    for (auto n: zip(vNx, vNy, vNz, vRepetitions)) {
         auto Nx = n[0];
         auto Ny = n[1];
         auto Nz = n[2];
+        auto repetitions = n[3];
 
         // Global size of the 3D grid
         fftw_complex *data;
@@ -70,9 +79,20 @@ int main(int argc, char **argv) {
 
         // Create plan_forward for in-place forward DFT
         fftw_plan plan_forward;
-        plan_forward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE);
         fftw_plan plan_backward;
-        plan_backward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE);
+        if (transpose_output) {
+            plan_forward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_FORWARD, FFTW_MEASURE);
+            plan_backward = fftw_mpi_plan_dft_3d(Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_BACKWARD, FFTW_MEASURE);
+        } else {
+            plan_forward = fftw_mpi_plan_dft_3d(
+                    Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_FORWARD,
+                    FFTW_MEASURE | FFTW_MPI_TRANSPOSED_OUT
+            );
+            plan_backward = fftw_mpi_plan_dft_3d(
+                    Nx, Ny, Nz, data, data, MPI_COMM_WORLD, FFTW_BACKWARD,
+                    FFTW_MEASURE | FFTW_MPI_TRANSPOSED_IN
+            );
+        }
 
         // Initialize data to some function my_function(x,y)
         for (auto i = 0; i < local_n0; ++i) {
@@ -95,7 +115,7 @@ int main(int argc, char **argv) {
 
         // Compute transforms, in-place, as many times as desired
         auto start_time = chrono::system_clock::now();
-        for (auto ii = 0ul; ii < repetitions; ++ii) {
+        for (auto ii = 0; ii < repetitions; ++ii) {
             fftw_execute(plan_forward);
             fftw_execute(plan_backward);
             for_each(&data[0][0], &data[0][0] + 2 * alloc_local, [scale](auto &item) { item *= scale; });

@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
             "Benchmarks a 3D complex FFT using AccFFT"
     );
 
-    auto repetitions = 0ul;
+    auto vRepetitions = vector<unsigned long>();
     auto vNx = vector<int>();
     auto vNy = vector<int>();
     auto vNz = vector<int>();
@@ -29,7 +29,8 @@ int main(int argc, char **argv) {
     // Add all the different program options
     cli_description.add_options()
             ("help", "gives this help message")
-            ("repetitions,r", po::value<unsigned long int>(&repetitions)->default_value(100),
+            ("repetitions,r",
+             po::value<vector<unsigned long int>>(&vRepetitions)->multitoken()->default_value({100}, "100"),
              "number of FFTs performed during this run")
             ("nx", po::value<vector < int>>
     (&vNx)->multitoken()->default_value({128}, "128"), "grid dimension along the x-axis")
@@ -59,10 +60,11 @@ int main(int argc, char **argv) {
 
     MpiMasterWrite(results_header("AccFFT complex transform over a 3D region"));
 
-    for (auto n: zip(vNx, vNy, vNz)) {
+    for (auto n: zip(vNx, vNy, vNz, vRepetitions)) {
         auto Nx = n[0];
         auto Ny = n[1];
         auto Nz = n[2];
+        auto repetitions = n[3];
 
         // Global size of the 2D grid
         Complex *data;
@@ -101,7 +103,7 @@ int main(int argc, char **argv) {
         auto start_time = chrono::system_clock::now();
         auto scale = 1.0 / (Nx * Ny * Nz);
 
-        for (auto ii = 0ul; ii < repetitions; ++ii) {
+        for (auto ii = 0; ii < repetitions; ++ii) {
             accfft_execute_c2c(plan, ACCFFT_FORWARD, data, data);
             accfft_execute_c2c(plan, ACCFFT_BACKWARD, data, data);
             for_each(&data[0][0], &data[0][0] + 2 * isize[0] * isize[1] * n[2], [scale](auto &item) { item *= scale; });
